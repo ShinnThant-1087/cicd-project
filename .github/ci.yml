@@ -1,0 +1,233 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------
+  # Job 1: Check ESLint and Prettier
+  # Runs for pushes and pull requests to main
+  # ---------------------------------------------------------
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Check formatting
+        run: npm run format:check
+
+  # ---------------------------------------------------------
+  # Job 2: Run automated tests
+  # Starts only after the lint job succeeds
+  # ---------------------------------------------------------
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: [lint]
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PORT: ${{ secrets.APP_PORT }}
+      CI: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create .env.test
+        run: |
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env.test
+          echo "PORT=${{ secrets.APP_PORT }}" >> .env.test
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Run integration tests
+        run: npm run test:integration
+
+      - name: Run end-to-end tests
+        run: npm run test:e2e
+
+  # ---------------------------------------------------------
+  # Job 3: Generate reports
+  # Runs after tests, only for a direct push to main
+  # ---------------------------------------------------------
+  report:
+    name: Generate Reports
+    runs-on: ubuntu-latest
+    needs: [test]
+
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PORT: ${{ secrets.APP_PORT }}
+      CI: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create .env.test
+        run: |
+          echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" > .env.test
+          echo "PORT=${{ secrets.APP_PORT }}" >> .env.test
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate reports
+        run: npm run report
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            reports/
+            coverage-report/
+            playwright-report/
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------
+  # Job 4: Publish report to GitHub Pages
+  # Runs after the report job, only for a push to main
+  # ---------------------------------------------------------
+  pages:
+    name: Deploy Reports to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [report]
+
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download reports artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: reports
+          path: public
+
+      - name: Create index page
+        run: |
+          cat > public/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>ST0526 CI Reports</title>
+            <style>
+              body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 40px auto;
+                padding: 20px;
+                line-height: 1.6;
+              }
+
+              h1 {
+                margin-bottom: 8px;
+              }
+
+              ul {
+                padding-left: 20px;
+              }
+
+              a {
+                font-size: 18px;
+              }
+            </style>
+          </head>
+          <body>
+            <h1>ST0526 CI/CD Reports</h1>
+            <p>Select a report to view:</p>
+
+            <ul>
+              <li>
+                <a href="reports/qa-report.html">
+                  QA Report
+                </a>
+              </li>
+              <li>
+                <a href="coverage-report/index.html">
+                  Jest Coverage Report
+                </a>
+              </li>
+              <li>
+                <a href="playwright-report/index.html">
+                  Playwright Report
+                </a>
+              </li>
+            </ul>
+          </body>
+          </html>
+          EOF
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
