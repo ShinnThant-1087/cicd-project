@@ -17,6 +17,8 @@ function populateSomethingsTable() {
           deleteSomething(something.id);
         };
 
+        console.log('Hello!');
+
         somethingsTableBody.appendChild(row);
       });
     })
