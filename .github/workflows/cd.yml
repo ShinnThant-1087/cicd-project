@@ -18,3 +18,6 @@ jobs:
 
       - name: Deploy to Render
         run: curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+
+      - name: Deployment placeholder
+        run: echo "All CI checks passed. Configure a deploy target above."
